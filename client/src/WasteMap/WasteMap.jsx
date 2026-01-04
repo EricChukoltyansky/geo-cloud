@@ -41,47 +41,41 @@ function WasteMap() {
     });
     initialMap.addOverlay(overlay);
 
-    // Fetch waste sites data
-    fetch("http://localhost:3000/api/waste-sites")
-      .then((response) => response.json())
-      .then((geojson) => {
-        const vectorSource = new VectorSource({
-          features: new GeoJSON().readFeatures(geojson, {
-            featureProjection: "EPSG:3857",
-          }),
-        });
+    // Load from GeoServer WFS
+    const vectorSource = new VectorSource({
+      format: new GeoJSON(),
+      url: "http://localhost:8600/geoserver/wfs?service=WFS&version=1.1.0&request=GetFeature&typeName=eric:cddl_e&outputFormat=application/json&srsName=EPSG:4326",
+    });
 
-        const vectorLayer = new VectorLayer({
-          source: vectorSource,
-          style: new Style({
-            image: new CircleStyle({
-              radius: 7,
-              fill: new Fill({ color: "#ff6b35" }),
-              stroke: new Stroke({ color: "#fff", width: 2 }),
-            }),
-          }),
-        });
+    const vectorLayer = new VectorLayer({
+      source: vectorSource,
+      style: new Style({
+        image: new CircleStyle({
+          radius: 7,
+          fill: new Fill({ color: "#ff6b35" }),
+          stroke: new Stroke({ color: "#fff", width: 2 }),
+        }),
+      }),
+    });
 
-        initialMap.addLayer(vectorLayer);
+    initialMap.addLayer(vectorLayer);
 
-        // Click handler
-        initialMap.on("singleclick", (evt) => {
-          const feature = initialMap.forEachFeatureAtPixel(
-            evt.pixel,
-            (feature) => feature
-          );
+    // Click handler
+    initialMap.on("singleclick", (evt) => {
+      const feature = initialMap.forEachFeatureAtPixel(
+        evt.pixel,
+        (feature) => feature
+      );
 
-          if (feature) {
-            const props = feature.getProperties();
-            setSelectedSite(props);
-            overlay.setPosition(evt.coordinate);
-          } else {
-            setSelectedSite(null);
-            overlay.setPosition(undefined);
-          }
-        });
-      })
-      .catch((error) => console.error("Error loading waste sites:", error));
+      if (feature) {
+        const props = feature.getProperties();
+        setSelectedSite(props);
+        overlay.setPosition(evt.coordinate);
+      } else {
+        setSelectedSite(null);
+        overlay.setPosition(undefined);
+      }
+    });
 
     setMap(initialMap);
 
