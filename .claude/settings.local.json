@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir /s \"C:\\Projects\\geo-cloud\")"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

@@ -1,0 +1,180 @@
+version: '3.9'
+
+volumes:
+   geoserver-data:
+   geo-db-data:
+   opensearch-data:
+   rabbit-data:
+   opensearch-plugins:
+   redis-data:
+
+services:
+  show-env:
+    image: alpine:latest
+    env_file:
+      - .env
+    command: sh -c "printenv | grep -v 'no_proxy'"
+    profiles:
+      - debug
+
+  db:
+    image: kartoza/postgis:17-3.5
+    volumes:
+      - geo-db-data:/var/lib/postgresql
+    ports:
+      - ${POSTGIS_PORT}:5432
+    environment:
+      - POSTGRES_DB=${POSTGIS_DB}
+      - POSTGRES_USER=${POSTGIS_USER}
+      - POSTGRES_PASS=${POSTGIS_PASS}
+      - ALLOW_IP_RANGE=${ALLOW_IP_RANGE}
+      - FORCE_SSL=${FORCE_SSL:-FALSE}
+    restart: on-failure
+    healthcheck:
+      test: "PGPASSWORD=${POSTGIS_PASS} pg_isready -h 127.0.0.1 -U ${POSTGIS_USER} -d ${POSTGIS_DB}"
+    profiles:
+     - partial
+     - standard
+
+  geoserver:
+    image: kartoza/geoserver:2.23.6
+    volumes:
+      - geoserver-data:/opt/geoserver/data_dir
+      - ${GEOSERVER_VOLUME_MOUNT_DIR}:/cache
+      - ${GEOSERVER_VOLUME_FONTS_DIR:-~/Documents/styles}:/layer-styles/resource/
+    ports:
+      - 8600:8080
+    restart: on-failure
+    environment:
+      - GEOSERVER_ADMIN_PASSWORD=${GEOSERVER_ADMIN_PASSWORD}
+      - GEOSERVER_ADMIN_USER=${GEOSERVER_ADMIN_USER}
+      - INITIAL_MEMORY=${INITIAL_MEMORY}
+      - MAXIMUM_MEMORY=${MAXIMUM_MEMORY}
+      - STABLE_EXTENSIONS=${STABLE_EXTENSIONS}
+      - COMMUNITY_EXTENSIONS=${COMMUNITY_EXTENSIONS}
+      - GEOSERVER_CONTEXT_ROOT=${GEOSERVER_CONTEXT_ROOT}
+      - SAMPLE_DATA=${SAMPLE_DATA}
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: "curl --fail --silent --write-out 'HTTP CODE : %{http_code}\n' --output /dev/null -u ${GEOSERVER_ADMIN_USER}:'${GEOSERVER_ADMIN_PASSWORD}' http://localhost:8080/geoserver/rest/about/version.xml"
+      interval: 1m30s
+      timeout: 10s
+      retries: 3
+    profiles:
+     - partial
+     - standard
+
+  fluent-bit:
+    container_name: fluent-bit
+    image: fluent/fluent-bit
+    volumes:
+      - ./fluentbit/fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf
+      - ./fluentbit/parsers_govtrack.conf:/fluent-bit/etc/parsers_govtrack.conf
+      - ./fluentbit/logs/logs.txt:/var/log/logs.txt
+    environment:
+      - FLUENT_BIT_BUFFER_MAX_SIZE=10M
+    profiles:
+     - log
+     - standard
+
+  opensearch-node:
+    image: opensearchproject/opensearch:2.5.0
+    environment:
+      - node.ingest=true
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
+      - HOST_PORT=9200
+      - OPENSEARCH_INITIAL_ADMIN_PASSWORD=${OPENSEARCH_INITIAL_ADMIN_PASSWORD}
+      - DISABLE_INSTALL_DEMO_CONFIG=true
+      - DISABLE_SECURITY_PLUGIN=true
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+      - opensearch-plugins:/usr/share/opensearch/plugins
+    ports:
+      - 9200:9200 # REST API
+      - 9600:9600 # Performance Analyzer
+    profiles:
+     - standard
+
+  opensearch-dashboards:
+    image: opensearchproject/opensearch-dashboards:2
+    environment:
+      OPENSEARCH_HOSTS: '["http://opensearch-node:9200"]'
+      DISABLE_SECURITY_DASHBOARDS_PLUGIN: "true"
+    ports:
+      - 5601:5601 # Map host port 5601 to container port 5601
+    profiles:
+     - standard
+
+  rabbit-mq:
+    image: rabbitmq:3.13.3-management
+    ports:
+      - 5672:5672
+      - 15672:15672
+    hostname: ${RABBITMQ_HOSTNAME}
+    environment:
+      - RABBITMQ_DEFAULT_USER=${RABBITMQ_USER}
+      - RABBITMQ_DEFAULT_PASS=${RABBITMQ_PASSWORD}
+      - RABBITMQ_DEFAULT_VHOST=${RABBIT_VHOST}
+    restart: on-failure
+    volumes:
+      - rabbit-data:/var/lib/rabbitmq/mnesia/
+    healthcheck:
+      test: rabbitmq-diagnostics -q ping
+      interval: 30s
+      timeout: 30s
+      retries: 3
+    profiles:
+      - autoupdate
+      - standard
+      - partial
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.57
+    container_name: jaeger
+    ports:
+      - "6831:6831/udp"
+      - "6832:6832/udp"
+      - "5778:5778"
+      - "16686:16686"
+      - "4317:4317"
+      - "4318:4318"
+      - "14250:14250"
+      - "14268:14268"
+      - "14269:14269"
+      - "9411:9411"
+    environment:
+      - COLLECTOR_ZIPKIN_HOST_PORT=:9411
+      - SPAN_STORAGE_TYPE=opensearch
+      - ES_TAGS_AS_FIELDS_ALL=true
+      - ES_USERNAME=admin
+      - ES_PASSWORD=admin
+      - ES_TLS_SKIP_HOST_VERIFY=true
+    command: [
+      "--es.server-urls=https://opensearch-node:9200",
+      "--es.tls.enabled=true",
+    ]
+    depends_on:
+      - opensearch-node
+    profiles:
+     - standard
+
+  redis:
+    image: redis
+    ports:
+      - 6379:6379
+    volumes:
+      - redis-data:/data
+    profiles:
+      - layers-upload
+      - partial
